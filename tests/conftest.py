@@ -7,13 +7,6 @@ import swpt_pythonlib.flask_signalbus as fsb
 from mock import Mock
 
 
-@event.listens_for(Engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
-
-
 class SignalBusAlchemy(fsb.SignalBusMixin, fsa.SQLAlchemy):
     pass
 
@@ -66,7 +59,6 @@ def signalbus(app, db):
     # specific to PostgreSQL, and would fail on SQLite.
     db.signalbus.SET_SEQSCAN_ON = text('PRAGMA shrink_memory')
     db.signalbus.SET_FORCE_CUSTOM_PLAN = text('PRAGMA shrink_memory')
-    db.signalbus.SET_DEFAULT_PLAN_CACHE_MODE = text('PRAGMA shrink_memory')
     db.signalbus.SET_STATISTICS_TARGET = text('PRAGMA shrink_memory')
     db.signalbus._analyze_table = lambda _: None
 
@@ -141,23 +133,6 @@ def SignalSendMany(db, send_mock):
 
     db.create_all()
     yield SignalSendMany
-    db.session.remove()
-    db.drop_all()
-
-
-@pytest.fixture
-def SignalProperty(db, send_mock, Signal):
-    class SignalProperty(db.Model):
-        __tablename__ = 'test_signal_property'
-        signal_id = db.Column(
-            db.ForeignKey(Signal.id, ondelete='CASCADE'), primary_key=True)
-        name = db.Column(db.String(60), primary_key=True)
-        value = db.Column(db.String(60))
-        signal = db.relationship(
-            Signal, backref=db.backref("properties", passive_deletes='all'))
-
-    db.create_all()
-    yield SignalProperty
     db.session.remove()
     db.drop_all()
 

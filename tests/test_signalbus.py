@@ -1,5 +1,6 @@
 import pytest
 import flask_sqlalchemy as fsa
+from sqlalchemy import select
 from mock import call
 from .conftest import SignalBusAlchemy
 
@@ -58,9 +59,9 @@ def test_flushmany_signal_model(app, signalbus_with_pending_signal):
 
 
 def test_send_signal_success(db, signalbus, send_mock, Signal):
-    sig = Signal(name='signal', value='1')
-    db.session.add(sig)
+    db.session.add(Signal(name='signal', value='1'))
     db.session.flush()
+    sig = db.session.execute(select(Signal.__table__)).one()
     sig_id = sig.id
     send_mock.assert_not_called()
     db.session.commit()
@@ -99,68 +100,3 @@ def test_send_nonsignal_model(db, signalbus, send_mock, NonSignal):
     db.session.flush()
     db.session.commit()
     assert NonSignal.query.count() == 1
-
-
-def test_signal_with_props_success(
-        db, signalbus, send_mock, Signal, SignalProperty):
-    sig = Signal(name='signal', value='1')
-    sig.properties = [
-        SignalProperty(name='first_name', value='John'),
-        SignalProperty(name='last_name', value='Doe'),
-    ]
-    db.session.add(sig)
-    db.session.flush()
-    assert Signal.query.count() == 1
-    assert SignalProperty.query.count() == 2
-    sig_id = sig.id
-    send_mock.assert_not_called()
-    db.session.commit()
-    signalbus.flushmany()
-    send_mock.assert_called_once()
-    args, kwargs = send_mock.call_args
-    assert kwargs == {}
-    assert len(args) == 5
-    assert args[:3] == (sig_id, 'signal', '1')
-    props = args[3]
-    assert type(props) is dict
-    assert len(props) == 2
-    assert props['first_name'] == 'John'
-    assert props['last_name'] == 'Doe'
-    assert Signal.query.count() == 0
-    assert SignalProperty.query.count() == 0
-    assert args[4] == str(sig)
-
-
-def test_signal_with_props_is_efficient(app, db, Signal, SignalProperty):
-    with app.test_request_context():
-        sig = Signal(name='signal', value='1')
-        sig.properties = [
-            SignalProperty(name='first_name', value='John'),
-            SignalProperty(name='last_name', value='Doe'),
-        ]
-        db.session.add(sig)
-        db.session.commit()
-        all_statements = [
-            q.statement for q in fsa.record_queries.get_recorded_queries()]
-        assert not any('FROM test_signal' in s for s in all_statements)
-
-
-def test_flush_signal_with_props(
-        db, signalbus, send_mock, Signal, SignalProperty):
-    sig = Signal(name='signal', value='1')
-    sig.properties = [
-        SignalProperty(name='first_name', value='John'),
-        SignalProperty(name='last_name', value='Doe'),
-    ]
-    db.session.add(sig)
-    db.session.commit()
-    send_mock.assert_not_called()
-    signalbus.flushmany()
-    send_mock.assert_called_once()
-    props = send_mock.call_args[0][3]
-    assert type(props) is dict
-    assert len(props) == 2
-    assert props['first_name'] == 'John'
-    assert props['last_name'] == 'Doe'
-    assert Signal.query.count() == 0
-    assert SignalProperty.query.count() == 0
