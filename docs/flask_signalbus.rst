@@ -55,31 +55,37 @@ bus should have its own database model class defined. For example::
       id = db.Column(db.Integer, primary_key=True, autoincrement=True)
       message_text = db.Column(db.Text, nullable=False)
 
-      def send_signalbus_message(self):
+      @classmethod
+      def send_signalbus_message(cls, obj):
           # Write some code here, that sends
           # the message over the message bus!
+          print(obj.id)
+          print(obj.message_text)
 
 Here, ``MySignal`` represent one particular type of message that we will be
 sending over the message bus. We call this a "signal model".
 
-A *signal model* is an otherwise normal database model class (a subclass of
-``db.Model``), which however has a ``send_signalbus_message`` method
-defined.
+A *signal model* is an otherwise normal database model class (a
+subclass of ``db.Model``), which however has a
+``send_signalbus_message`` *class method* defined.
 
-- The ``send_signalbus_message`` method should be implemented in such
-  a way that when it returns, the message is guaranteed to be
+- The ``send_signalbus_message`` *class method* should accept one
+  positional argument: an object which will contain the values the
+  columns as attributes. The method should be implemented in such a
+  way that when it returns, the message is guaranteed to be
   successfully sent and stored by the broker. Normally, this means
   that an acknowledge has been received for the message from the
   broker.
 
 - The signal model class **may** have a ``send_signalbus_messages``
   *class method* which accepts one positional argument: an iterable of
-  instances of the class. The method should be implemented in such a
-  way that when it returns, all messages for the passed instances
-  are guaranteed to be successfully sent and stored by the broker.
-  Implementing a ``send_signalbus_messages`` class method can greatly
-  improve performance, because message brokers are usually optimized
-  to process messages in batches much more efficiently.
+  objects which will contain the values of the columns as attributes.
+  The method should be implemented in such a way that when it returns,
+  all messages for the passed objects are guaranteed to be
+  successfully sent and stored by the broker. Implementing a
+  ``send_signalbus_messages`` class method can greatly improve
+  performance, because message brokers are usually optimized to
+  process messages in batches much more efficiently.
 
 - The signal model class **may** have a ``signalbus_burst_count``
   integer attribute defined, which determines how many individual
