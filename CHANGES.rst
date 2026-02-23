@@ -1,12 +1,15 @@
 Changelog
 =========
 
-0.11.11
+0.12.0
 --------------
 
 - Allow more efficient row deletion in `flask_signalbus`. Now when the
   "choose_rows" classmethod is defined, a "with-query" join will be
-  used for deleting rows.
+  used for deleting rows. This is a breaking change, because the type
+  of the objects passed to the `send_signalbus_message` and
+  `send_signalbus_messages` methods have changed (from model
+  instances, to SQLAlchemy result rows).
 
 
 0.11.10

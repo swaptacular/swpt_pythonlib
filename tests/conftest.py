@@ -94,17 +94,18 @@ def Signal(db, send_mock):
         name = db.Column(db.String(60))
         value = db.Column(db.String(60))
 
-        def send_signalbus_message(self):
-            properties = getattr(self, 'properties', [])
+        @classmethod
+        def send_signalbus_message(cls, obj):
+            properties = getattr(obj, 'properties', [])
             send_mock(
-                self.id,
-                self.name,
-                self.value,
+                obj.id,
+                obj.name,
+                obj.value,
                 {p.name: p.value for p in properties},
-                str(self),
+                str(obj),
             )
-            if self.name == 'error':
-                raise ValueError(self.value)
+            if obj.name == 'error':
+                raise ValueError(obj.value)
 
         signalbus_order_by = (id, db.desc(name))
 
@@ -123,7 +124,8 @@ def SignalSendMany(db, send_mock):
 
         signalbus_burst_count = 100
 
-        def send_signalbus_message(self):
+        @classmethod
+        def send_signalbus_message(cls, obj):
             pass
 
         @classmethod
