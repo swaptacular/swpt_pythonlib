@@ -1,7 +1,7 @@
 import logging
 import flask_sqlalchemy as fsa
 import sqlalchemy.orm as sa_orm
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.inspection import inspect
 from sqlalchemy.sql.expression import tuple_, text
 from typing import Iterable, Optional
@@ -36,7 +36,6 @@ class SignalBus:
 
     SET_SEQSCAN_ON = text("SET LOCAL enable_seqscan = on")
     SET_FORCE_CUSTOM_PLAN = text("SET LOCAL plan_cache_mode = force_custom_plan")
-    SET_DEFAULT_PLAN_CACHE_MODE = text("SET LOCAL plan_cache_mode = DEFAULT")
     SET_STATISTICS_TARGET = text("SET LOCAL default_statistics_target = 1")
 
     def __init__(self, db: fsa.SQLAlchemy):
@@ -96,26 +95,19 @@ class SignalBus:
         assert burst_count > 0, '"signalbus_burst_count" must be positive'
         return burst_count
 
-    def _send_and_delete(self, model_cls: type[Model], instances: list[Model]):
-        n = len(instances)
-        if n > 1 and hasattr(model_cls, "send_signalbus_messages"):
-            model_cls.send_signalbus_messages(instances)
+    def _send_messages(self, model_cls: type[Model], signals: list) -> None:
+        if len(signals) > 1 and hasattr(model_cls, "send_signalbus_messages"):
+            model_cls.send_signalbus_messages(signals)
         else:
-            for instance in instances:
-                assert hasattr(instance, "send_signalbus_message")
-                instance.send_signalbus_message()
+            for signal in signals:
+                assert hasattr(model_cls, "send_signalbus_message")
+                model_cls.send_signalbus_message(signal)
 
-        session = self.db.session
-        for instance in instances:
-            session.delete(instance)
-
-        return n
-
-    def _analyze_table(self, model_cls: type[Model]) -> None:
+    def _analyze_table(self, table_name: str) -> None:
         session = self.db.session
         session.execute(self.SET_STATISTICS_TARGET)
         session.execute(
-            text(f"ANALYZE (SKIP_LOCKED) {model_cls.__table__.name}"),
+            text(f"ANALYZE (SKIP_LOCKED) {table_name}"),
             execution_options={"compiled_cache": None},
         )
         session.commit()
@@ -125,37 +117,58 @@ class SignalBus:
         logger.info("Flushing %s.", model_cls.__name__)
 
         sent_count = 0
-        burst_count = self._get_signal_burst_count(model_cls)
         mapper = inspect(model_cls)
         pk_attrs = [
             mapper.get_property_by_column(c).class_attribute
             for c in mapper.primary_key
         ]
+        pk = tuple_(*pk_attrs)
+        table = model_cls.__table__
+
+        def pk_tuples(rows) -> list[tuple]:
+            return [
+                tuple(getattr(row, attr.name) for attr in pk_attrs)
+                for row in rows
+            ]
+
+        if hasattr(model_cls, "choose_rows"):
+            def lock_rows(pk_rows):
+                chosen = model_cls.choose_rows([tuple(r) for r in pk_rows])
+                return (
+                    select(table)
+                    .join(chosen, pk == tuple_(*chosen.c))
+                    .with_for_update(skip_locked=True)
+                )
+            def delete_locked(rows):
+                to_delete = model_cls.choose_rows(pk_tuples(rows))
+                return delete(table).where(pk == tuple_(*to_delete.c))
+        else:
+            def lock_rows(pk_rows):
+                return (
+                    select(table)
+                    .where(pk.in_(pk_rows))
+                    .with_for_update(skip_locked=True)
+                )
+            def delete_locked(rows):
+                return delete(table).where(pk.in_(pk_tuples(rows)))
+
         with self.db.engine.connect() as conn:
             conn.execute(self.SET_SEQSCAN_ON)
+            burst_count = self._get_signal_burst_count(model_cls)
+
             with conn.execution_options(yield_per=burst_count).execute(
                 select(*pk_attrs)
             ) as result:
-                self._analyze_table(model_cls)
-                pk = tuple_(*pk_attrs)
+                self._analyze_table(table.name)
                 session = self.db.session
-                q = session.query(model_cls).with_for_update(skip_locked=True)
-
-                if hasattr(model_cls, "choose_rows"):
-                    def _query_signals(pks):
-                        chosen = model_cls.choose_rows([tuple(x) for x in pks])
-                        return q.join(chosen, pk == tuple_(*chosen.c)).all()
-                else:
-                    def _query_signals(pks):
-                        return q.filter(pk.in_(pks)).all()
 
                 for primary_keys in result.partitions():
                     session.execute(self.SET_FORCE_CUSTOM_PLAN)
-                    signals = _query_signals(primary_keys)
-                    session.execute(self.SET_DEFAULT_PLAN_CACHE_MODE)
-                    sent_count += self._send_and_delete(model_cls, signals)
+                    rows = session.execute(lock_rows(primary_keys)).all()
+                    self._send_messages(model_cls, rows)
+                    session.execute(delete_locked(rows))
                     session.commit()
-                    session.expunge_all()
+                    sent_count += len(rows)
 
         return sent_count
 
